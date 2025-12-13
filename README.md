@@ -7,6 +7,10 @@ The plugin implements the full session-based authentication flow used by Canon p
 `prninfo_data.cgi`, returning standard **OK / WARNING / CRITICAL / UNKNOWN**
 states compatible with Icinga and Nagios.
 
+![Shell](https://img.shields.io/badge/language-bash-green)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Monitoring](https://img.shields.io/badge/Icinga-Nagios-orange)
+
 ---
 
 ## Features
