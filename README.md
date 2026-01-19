@@ -7,9 +7,18 @@ The plugin implements the full session-based authentication flow used by Canon p
 `prninfo_data.cgi`, returning standard **OK / WARNING / CRITICAL / UNKNOWN**
 states compatible with Icinga and Nagios.
 
-![Shell](https://img.shields.io/badge/language-bash-green)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Monitoring](https://img.shields.io/badge/Icinga-Nagios-orange)
+![Language](https://img.shields.io/github/languages/top/DanielVd/icinga-check-canon-rui-ink)
+![License](https://img.shields.io/github/license/DanielVd/icinga-check-canon-rui-ink)
+![Last commit](https://img.shields.io/github/last-commit/DanielVd/icinga-check-canon-rui-ink)
+![Release](https://img.shields.io/github/v/release/DanielVd/icinga-check-canon-rui-ink)
+
+---
+
+## Setup
+
+1. Ensure the requirements listed below are available on the host where the plugin will run.
+2. Configure the plugin via the environment variables described in the Configuration section.
+3. Run the script manually to verify output, then integrate it into Icinga/Nagios as needed.
 
 ---
 
@@ -41,13 +50,13 @@ The plugin is configured via **environment variables**.
 ### Required variables
 
 | Variable | Description |
-|--------|-------------|
+| --- | --- |
 | `NAMAE` | Canon password hash captured from the web UI |
 
 ### Optional variables
 
 | Variable | Default | Description |
-|--------|---------|-------------|
+| --- | --- | --- |
 | `BASE` | `https://printer.example.local` | Canon Remote UI base URL |
 | `IDTYPE` | `2` | Canon authentication type |
 
@@ -71,22 +80,22 @@ export NAMAE="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 ### Example outputs
 
 **OK**
-```
+```text
 [OK] Black:40%(OK) Color:30%(OK)
 ```
 
 **WARNING**
-```
+```text
 [WARNING] Black:10%(LOW) Color:30%(OK)
 ```
 
 **CRITICAL**
-```
+```text
 [CRITICAL] Black:0%(EMPTY) Color:20%(LOW)
 ```
 
 **UNKNOWN**
-```
+```text
 [UNKNOWN] login step sendpw.cgi failed
 ```
 
@@ -98,7 +107,7 @@ to help troubleshooting.
 ## Exit codes
 
 | Code | Meaning |
-|----|--------|
+| --- | --- |
 | 0 | OK |
 | 1 | WARNING |
 | 2 | CRITICAL |
@@ -126,7 +135,7 @@ Canon printers do not expose ink levels via SNMP or simple REST APIs.
 By inspecting the Canon Remote UI with browser developer tools:
 
 1. The web interface periodically calls:
-   ```
+   ```text
    /rui/prninfo_data.cgi
    ```
 2. The response contains XML entries like:
@@ -137,11 +146,11 @@ By inspecting the Canon Remote UI with browser developer tools:
 
    - First value: ink type index
    - Second value: ink level index (mapped to percentages)
-   - Third value: ink status  
-     - `0` = OK  
-     - `1` = Low ink  
-     - `2` = Empty  
-     - `3` = Unknown / unsupported  
+   - Third value: ink status
+     - `0` = OK
+     - `1` = Low ink
+     - `2` = Empty
+     - `3` = Unknown / unsupported
 
 4. Authentication is session-based:
    - Password is sent as a hashed value (`NAMAE`)
