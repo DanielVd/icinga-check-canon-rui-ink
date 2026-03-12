@@ -27,7 +27,9 @@ states compatible with Icinga and Nagios.
 - Pure Bash plugin (no Python, no Perl)
 - Uses Canon Remote UI (RUI) internal endpoints
 - Handles session-based authentication (SCID + SBID)
+- Retries login when the printer web UI is still waking up
 - Nagios/Icinga compliant output and exit codes
+- Emits perfdata for ink levels (`color`, `black`, ...)
 - Silent during normal operation
 - Full debug output only on UNKNOWN
 - Suitable for Icinga Director usage
@@ -59,6 +61,8 @@ The plugin is configured via **environment variables**.
 | --- | --- | --- |
 | `BASE` | `https://printer.example.local` | Canon Remote UI base URL |
 | `IDTYPE` | `2` | Canon authentication type |
+| `LOGIN_RETRIES` | `3` | Retries login if `SBID` is not immediately available |
+| `WAKEUP_DELAY_SECONDS` | `3` | Delay between wake-up/login retries |
 
 ### Example configuration
 
@@ -81,17 +85,17 @@ export NAMAE="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 **OK**
 ```text
-[OK] Black:40%(OK) Color:30%(OK)
+[OK] Black:40% Color:30% | black=40%;;;0;100 color=30%;;;0;100
 ```
 
 **WARNING**
 ```text
-[WARNING] Black:10%(LOW) Color:30%(OK)
+[WARNING] Black:10% Color:30% | black=10%;;;0;100 color=30%;;;0;100
 ```
 
 **CRITICAL**
 ```text
-[CRITICAL] Black:0%(EMPTY) Color:20%(LOW)
+[CRITICAL] Black:0% Color:20% | black=0%;;;0;100 color=20%;;;0;100
 ```
 
 **UNKNOWN**
@@ -100,7 +104,7 @@ export NAMAE="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 ```
 
 On UNKNOWN, the script prints the full authentication and request flow
-to help troubleshooting.
+to help troubleshooting. Sensitive values such as `NAMAE` are redacted from debug output.
 
 ---
 
@@ -125,6 +129,25 @@ Recommended approaches:
   - `/etc/sysconfig/icinga2`
 
 Avoid passing credentials via command arguments.
+
+### Example wrapper
+
+```bash
+#!/usr/bin/env bash
+export BASE="https://printer.example.local"
+export NAMAE="<redacted>"
+exec /opt/scripts/check_canon_rui_ink.sh
+```
+
+### Perfdata
+
+When the printer returns numeric levels, the plugin emits perfdata per cartridge:
+
+```text
+color=0%;;;0;100 black=20%;;;0;100
+```
+
+This works well with Icinga perfdata writers and Grafana dashboards backed by InfluxDB.
 
 ---
 

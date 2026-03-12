@@ -27,6 +27,8 @@ set -euo pipefail
 BASE="${BASE:-https://printer.example.local}"
 NAMAE="${NAMAE:-}" # Password hash captured from browser DevTools (DO NOT LOG)
 IDTYPE="${IDTYPE:-2}"
+LOGIN_RETRIES="${LOGIN_RETRIES:-3}"
+WAKEUP_DELAY_SECONDS="${WAKEUP_DELAY_SECONDS:-3}"
 
 # Threshold handling: Canon status codes drive severity
 # 0=OK, 1=LOW (WARN), 2=EMPTY (CRIT), 3=UNKNOWN_INK (WARN)
@@ -89,14 +91,11 @@ ink_type_name() {
   esac
 }
 
-# Map Canon ink status code to label
-status_label() {
+ink_perf_label() {
   case "$1" in
-    0) echo "OK" ;;
-    1) echo "LOW" ;;
-    2) echo "EMPTY" ;;
-    3) echo "UNKNOWN_INK" ;;
-    *) echo "UNKNOWN_INK" ;;
+    0) echo "color" ;;
+    1) echo "black" ;;
+    *) echo "ink$1" ;;
   esac
 }
 
@@ -113,7 +112,7 @@ status_severity() {
 
 # Safe curl wrapper:
 # - Never prints to stdout/stderr directly
-# - Stores stdout to a file (temp) and headers to a file (temp)
+# - Stores stdout to a file (temp) and optionally headers to a file (temp)
 # - On failure, returns non-zero but leaves artifacts for debug dump
 curl_to_files() {
   local url="$1"
@@ -131,7 +130,7 @@ curl_to_files() {
 
   : >"$err_file"
 
-  if ! curl -k -sS -L -m 10 \
+  if curl -k -sS -L -m 10 \
       -c "$cookiejar" -b "$cookiejar" \
       -H 'Content-Type: application/x-www-form-urlencoded' \
       --data "$data" \
@@ -139,16 +138,39 @@ curl_to_files() {
       -o "$body_out" \
       "$url" 2>"$err_file"
   then
-    local rc=$?
-    dbg "[curl] URL: $url"
-    dbg "[curl] DATA: $(sed -E 's/(NAMAE=)[^&]+/\1<redacted>/' <<<"$data")"
-    dbg "[curl] exit code: $rc"
-    dbg "[curl] stderr:"
-    dbg "$(sed -n '1,200p' "$err_file" 2>/dev/null || true)"
-    return "$rc"
+    return 0
   fi
 
+  local rc=$?
+  dbg "[curl] URL: $url"
+  dbg "[curl] DATA: $(sed -E 's/(NAMAE=)[^&]+/\1<redacted>/' <<<"$data")"
+  dbg "[curl] exit code: $rc"
+  dbg "[curl] stderr:"
+  dbg "$(sed -n '1,200p' "$err_file" 2>/dev/null || true)"
+  return "$rc"
+}
+
+wake_printer() {
+  local wake_headers="$WORKDIR/wakeup.headers"
+  local wake_body="$WORKDIR/wakeup.body"
+  local wake_err="$WORKDIR/wakeup.curlerr"
+
+  : >"$wake_err"
+  if ! curl -k -sS -L -m 8 -D "$wake_headers" -o "$wake_body" "${BASE}/index.html" 2>"$wake_err"; then
+    dbg "[wakeup] curl exit code: $?"
+    dbg "[wakeup] stderr:"
+    dbg "$(sed -n '1,120p' "$wake_err" 2>/dev/null || true)"
+    return 1
+  fi
+
+  dbg "[wakeup] initial GET /index.html completed"
   return 0
+}
+
+extract_sbid() {
+  grep -aoE 'name="SBID"[[:space:]]+value="[^"]+"' "$1" \
+    | head -1 \
+    | sed -E 's/.*value="([^"]+)".*/\1/' || true
 }
 
 # --- Main ---
@@ -180,34 +202,46 @@ dbg "[env] BASE=$BASE"
 dbg "[env] IDTYPE=$IDTYPE"
 dbg "[env] WORKDIR=$WORKDIR"
 dbg "[env] NAMAE=<redacted>"
+dbg "[env] LOGIN_RETRIES=$LOGIN_RETRIES"
+
+wake_printer || true
 
 # 1) Login: POST sendpw.cgi (sets SCID cookie + returns HTML containing SBID)
-dbg "[step1] POST /rui/sendpw.cgi"
-if ! curl_to_files "${BASE}/rui/sendpw.cgi" "NAMAE=${NAMAE}&IDTYPE=${IDTYPE}" "$COOKIE_JAR" "$SENDPW_HEADERS" "$SENDPW_BODY"; then
-  dbg "[step1] headers:"
-  dbg "$(sed -n '1,200p' "$SENDPW_HEADERS" 2>/dev/null || true)"
-  dbg "[step1] body:"
-  dbg "$(sed -n '1,200p' "$SENDPW_BODY" 2>/dev/null || true)"
-  finish "$UNKNOWN" "[UNKNOWN] login step sendpw.cgi failed"
-fi
+SBID=""
+for attempt in $(seq 1 "$LOGIN_RETRIES"); do
+  dbg "[step1] POST /rui/sendpw.cgi attempt ${attempt}/${LOGIN_RETRIES}"
+  if ! curl_to_files "${BASE}/rui/sendpw.cgi" "NAMAE=${NAMAE}&IDTYPE=${IDTYPE}" "$COOKIE_JAR" "$SENDPW_HEADERS" "$SENDPW_BODY"; then
+    dbg "[step1] headers:"
+    dbg "$(sed -n '1,200p' "$SENDPW_HEADERS" 2>/dev/null || true)"
+    dbg "[step1] body:"
+    dbg "$(sed -n '1,120p' "$SENDPW_BODY" 2>/dev/null || true)"
+    finish "$UNKNOWN" "[UNKNOWN] login step sendpw.cgi failed"
+  fi
 
-# Extract SCID from headers (optional, mostly for debug)
-SCID="$(grep -aoE 'Set-Cookie:[[:space:]]*SCID=[0-9a-f]+' "$SENDPW_HEADERS" | head -1 | sed -E 's/.*SCID=//' || true)"
-dbg "[step1] SCID(from header)=${SCID:-<not found>}"
+  SCID="$(grep -aoE 'Set-Cookie:[[:space:]]*SCID=[^;[:space:]]+' "$SENDPW_HEADERS" | head -1 | sed -E 's/.*SCID=//' || true)"
+  dbg "[step1] SCID(from header)=${SCID:-<not found>}"
 
-# Extract SBID from body (HTML hidden input)
-SBID="$(grep -aoE 'name="SBID"[[:space:]]+value="[0-9a-f]+"' "$SENDPW_BODY" \
-  | head -1 \
-  | sed -E 's/.*value="([0-9a-f]+)".*/\1/' || true)"
+  SBID="$(extract_sbid "$SENDPW_BODY")"
+  dbg "[step1] SBID(from body)=${SBID:-<not found>}"
 
-dbg "[step1] SBID(from body)=${SBID:-<not found>}"
+  if [[ -n "$SBID" ]]; then
+    break
+  fi
 
-if [[ -z "$SBID" ]]; then
   dbg "[step1] sendpw headers dump:"
   dbg "$(sed -n '1,200p' "$SENDPW_HEADERS" 2>/dev/null || true)"
   dbg "[step1] sendpw body dump:"
-  dbg "$(sed -n '1,250p' "$SENDPW_BODY" 2>/dev/null || true)"
-  finish "$UNKNOWN" "[UNKNOWN] login failed: SBID not found"
+  dbg "$(sed -n '1,200p' "$SENDPW_BODY" 2>/dev/null || true)"
+
+  if [[ "$attempt" -lt "$LOGIN_RETRIES" ]]; then
+    dbg "[step1] SBID not found, waiting ${WAKEUP_DELAY_SECONDS}s before retry"
+    sleep "$WAKEUP_DELAY_SECONDS"
+    wake_printer || true
+  fi
+done
+
+if [[ -z "$SBID" ]]; then
+  finish "$UNKNOWN" "[UNKNOWN] login failed: SBID not found after ${LOGIN_RETRIES} attempts"
 fi
 
 # 2) Finalize session: POST index.html with SBID
@@ -254,6 +288,7 @@ fi
 # Evaluate ink states
 worst="$OK"
 details=()
+perfdata=()
 
 for kv in "${INKS[@]}"; do
   val="${kv#*=}"          # "a,b,c"
@@ -261,17 +296,26 @@ for kv in "${INKS[@]}"; do
 
   pct="$(lvl_to_pct "$lvl")"
   name="$(ink_type_name "$t")"
-  label="$(status_label "$st")"
   severity="$(status_severity "$st")"
+  perf_label="$(ink_perf_label "$t")"
 
   [[ "$severity" -gt "$worst" ]] && worst="$severity"
-  details+=( "${name}:${pct}%(${label})" )
+  details+=( "${name}:${pct}%" )
+
+  if [[ "$pct" != "?" ]]; then
+    perfdata+=( "${perf_label}=${pct}%;;;0;100" )
+  fi
 done
 
 # Output only the plugin line (unless UNKNOWN, handled by finish())
+perfdata_suffix=""
+if [[ ${#perfdata[@]} -gt 0 ]]; then
+  perfdata_suffix=" | ${perfdata[*]}"
+fi
+
 case "$worst" in
-  0) finish "$OK"       "[OK] ${details[*]}" ;;
-  1) finish "$WARNING"  "[WARNING] ${details[*]}" ;;
-  2) finish "$CRITICAL" "[CRITICAL] ${details[*]}" ;;
-  *) finish "$UNKNOWN"  "[UNKNOWN] ${details[*]}" ;;
+  0) finish "$OK"       "[OK] ${details[*]}${perfdata_suffix}" ;;
+  1) finish "$WARNING"  "[WARNING] ${details[*]}${perfdata_suffix}" ;;
+  2) finish "$CRITICAL" "[CRITICAL] ${details[*]}${perfdata_suffix}" ;;
+  *) finish "$UNKNOWN"  "[UNKNOWN] ${details[*]}${perfdata_suffix}" ;;
 esac
