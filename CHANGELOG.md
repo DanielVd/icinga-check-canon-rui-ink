@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.2.0 — 2026-09-21
+## v1.2.0 (2026-09-21)
 
 ### Fixed
 - Correct the documentation: the actual plugin is Bash, not Python, and takes configuration from environment variables rather than unsupported CLI flags.
