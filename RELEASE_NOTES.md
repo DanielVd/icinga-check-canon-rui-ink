@@ -1,4 +1,4 @@
-# v1.2.0 — Canon Remote UI plugin hardening and automated tests
+# v1.2.0: Canon Remote UI plugin hardening and automated tests
 
 - Correct Bash-focused installation and configuration documentation.
 - Add offline integration tests and CI validation (Bash syntax, ShellCheck, Python unittest).
